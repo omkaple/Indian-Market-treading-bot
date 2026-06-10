@@ -1,0 +1,15 @@
+streamlit
+pandas
+numpy
+plotly
+pymongo
+matplotlib
+torch
+scikit-learn
+pyotp
+python-dotenv
+requests
+smartapi-python
+logzero
+websocket-client
+pycryptodome
