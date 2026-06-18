@@ -189,9 +189,9 @@ class LiveTradingBot:
                         self.log(f"🎉 Target hit! Closing active trade for {self.stock_symbol} at {price:.2f} (Target: {self.active_trade['target']:.2f})")
                         query = {"order_id": self.active_trade.get("order_id")} if self.active_trade.get("order_id") else {"timestamp": self.active_trade.get("timestamp"), "symbol": self.stock_symbol}
                         try:
-                            self.db_manager.db["executed_trades"].update_one(
+                            self.db_manager.update_trade(
                                 query,
-                                {"$set": {"status": "CLOSED_PROFIT", "exit_price": price, "exit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                                {"status": "CLOSED_PROFIT", "exit_price": price, "exit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                             )
                         except Exception as e:
                             self.log(f"Failed to update database for profit close: {e}", "ERROR")
@@ -200,9 +200,9 @@ class LiveTradingBot:
                         self.log(f"😭 Stop loss hit! Closing active trade for {self.stock_symbol} at {price:.2f} (Stop Loss: {self.active_trade['stop_loss']:.2f})")
                         query = {"order_id": self.active_trade.get("order_id")} if self.active_trade.get("order_id") else {"timestamp": self.active_trade.get("timestamp"), "symbol": self.stock_symbol}
                         try:
-                            self.db_manager.db["executed_trades"].update_one(
+                            self.db_manager.update_trade(
                                 query,
-                                {"$set": {"status": "CLOSED_LOSS", "exit_price": price, "exit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                                {"status": "CLOSED_LOSS", "exit_price": price, "exit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                             )
                         except Exception as e:
                             self.log(f"Failed to update database for loss close: {e}", "ERROR")
@@ -262,7 +262,7 @@ class LiveTradingBot:
                         'Volume': float(self.current_candle['Volume'])
                     }
                     
-                    # Insert completed candle to MongoDB
+                    # Insert completed candle to database
                     df_new = pd.DataFrame([candle_record])
                     df_new.set_index('Timestamp', inplace=True)
                     inserted = self.db_manager.bulk_insert_candles(self.stock_symbol, df_new)
@@ -275,7 +275,7 @@ class LiveTradingBot:
                         # Trigger evaluation
                         self._evaluate_live_crossover()
                     else:
-                        self.log("Failed to insert completed candle into MongoDB.", "ERROR")
+                        self.log("Failed to insert completed candle into database.", "ERROR")
                         
                     # Initialize next candle
                     self.current_candle_start = candle_start

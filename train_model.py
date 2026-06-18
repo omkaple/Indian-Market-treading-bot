@@ -104,7 +104,7 @@ def train_model(stock_symbol: str = "CANBK", epochs: int = 80, batch_size: int =
                 profit_target: float = 0.015, stop_loss: float = 0.005):
     db_manager = DatabaseManager()
     stock_symbol = stock_symbol.upper().replace("-EQ", "").replace("-BE", "").strip()
-    logger.info(f"Loading candles for {stock_symbol} from MongoDB...")
+    logger.info(f"Loading candles for {stock_symbol} from database...")
     df_candles = db_manager.load_candles_from_db(stock_symbol)
     
     if df_candles is None or df_candles.empty:

@@ -29,8 +29,9 @@ env/
 .env
 .env.local
 
-# MongoDB data
-mongodb_data/
+# JSON data storage
+data/
+scrip_master.json
 
 # Logs
 logs/

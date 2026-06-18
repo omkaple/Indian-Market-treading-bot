@@ -24,11 +24,7 @@ if env_path.exists():
     load_dotenv(dotenv_path=env_path)
 
 # Initialize database manager
-try:
-    db_manager = DatabaseManager()
-except Exception as e:
-    st.error(f"Failed to connect to local MongoDB. Ensure mongod is running on port 27017. Details: {e}")
-    st.stop()
+db_manager = DatabaseManager()
 
 # Local Scrip Master Cache Config
 SCRIP_MASTER_PATH = Path(__file__).parent / "scrip_master.json"
@@ -160,8 +156,7 @@ else:
 
 # Load database metadata
 collection_name = db_manager.get_collection_name(selected_stock)
-collection = db_manager.db[collection_name]
-document_count = collection.count_documents({})
+document_count = db_manager.get_document_count(selected_stock)
 
 # Define model path and check status early
 model_filename = os.path.join("trained_models", f"{selected_stock.lower()}_model.pth")
@@ -593,7 +588,7 @@ with tab_security:
 # -------------------------------------------------------------
 with tab_dashboard:
     st.title("📈 Quantitative Pipeline Dashboard & Vision AI Filter")
-    st.markdown("Pairing MongoDB data aggregation with local multi-modal Ollama Vision AI filtration.")
+    st.markdown("Pairing local data aggregation with local multi-modal Ollama Vision AI filtration.")
 
     # Check if database is empty or candles not loaded
     if df_candles is None or df_candles.empty or not model_exists:
@@ -1444,7 +1439,7 @@ with tab_monthly:
 # -------------------------------------------------------------
 with tab_history:
     st.subheader("📝 Live Execution Trade & Missed Trade History")
-    st.markdown("Persistent records of executed trade orders and missed trade events captured from MongoDB.")
+    st.markdown("Persistent records of executed trade orders and missed trade events captured from local storage.")
     
     # Load from DB
     exec_trades = db_manager.get_executed_trades()

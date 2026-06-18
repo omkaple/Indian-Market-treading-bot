@@ -1,10 +1,11 @@
 import os
+import json
 import logging
 import threading
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 import pandas as pd
 import numpy as np
-import pymongo
 import matplotlib
 matplotlib.use('Agg')  # Set non-interactive backend for background thread safety
 import matplotlib.pyplot as plt
@@ -13,77 +14,125 @@ import matplotlib.patches as patches
 # Configure module logger
 logger = logging.getLogger("Database")
 
-# MongoDB connection constants
-MONGO_URI = "mongodb://localhost:27017/"
-DB_NAME = "trading_bot_db"
+# JSON file storage directory
+DATA_DIR = Path(__file__).parent / "data"
+
 
 class DatabaseManager:
     def __init__(self):
+        """Initialize file-based storage. Creates the data directory if it doesn't exist."""
         try:
-            self.client: pymongo.MongoClient = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-            self.db: pymongo.database.Database = self.client[DB_NAME]
-            # Verify connection by pinging database
-            self.client.admin.command('ping')
-            logger.info("Successfully connected to local MongoDB server.")
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            logger.info(f"JSON file storage initialized at '{DATA_DIR}'.")
         except Exception as e:
-            logger.error(f"MongoDB connection failed: {e}")
+            logger.error(f"Failed to create data directory: {e}")
             raise
+        # Thread lock for safe concurrent file writes
+        self._lock = threading.Lock()
 
     def get_collection_name(self, symbol_name: str) -> str:
-        """Returns the isolated collection name for a given stock symbol."""
+        """Returns the isolated collection/file name for a given stock symbol."""
         clean_symbol = symbol_name.upper().replace("-EQ", "").replace("-BE", "").strip()
         return f"{clean_symbol.lower()}_5min_candles"
 
-    def bulk_insert_candles(self, symbol_name: str, df: pd.DataFrame) -> int:
-        """Bulk inserts cleaned dataframe records into MongoDB collection."""
+    def _get_candle_file_path(self, symbol_name: str) -> Path:
+        """Returns the JSON file path for a given stock symbol's candle data."""
         collection_name = self.get_collection_name(symbol_name)
-        collection = self.db[collection_name]
+        return DATA_DIR / f"{collection_name}.json"
+
+    def _get_trades_file_path(self, trade_type: str) -> Path:
+        """Returns the JSON file path for executed or missed trades."""
+        return DATA_DIR / f"{trade_type}.json"
+
+    def _read_json_file(self, file_path: Path) -> List[Dict[str, Any]]:
+        """Reads a JSON file and returns its contents as a list of dicts."""
+        if not file_path.exists():
+            return []
         try:
-            # Check if database is empty before writing
-            if collection.count_documents({}) > 0:
-                logger.warning(f"Collection {collection_name} already contains data. Duplicates might be written.")
-            
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Failed to read JSON file '{file_path}': {e}")
+            return []
+
+    def _write_json_file(self, file_path: Path, data: List[Dict[str, Any]]) -> bool:
+        """Writes a list of dicts to a JSON file atomically."""
+        try:
+            temp_path = file_path.with_suffix(".json.tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str)
+            # Atomic rename
+            if file_path.exists():
+                os.remove(file_path)
+            os.rename(temp_path, file_path)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write JSON file '{file_path}': {e}")
+            return False
+
+    def get_document_count(self, symbol_name: str) -> int:
+        """Returns the number of candle records stored for a symbol."""
+        file_path = self._get_candle_file_path(symbol_name)
+        if not file_path.exists():
+            return 0
+        data = self._read_json_file(file_path)
+        return len(data)
+
+    def bulk_insert_candles(self, symbol_name: str, df: pd.DataFrame) -> int:
+        """Bulk inserts cleaned dataframe records into a JSON file."""
+        file_path = self._get_candle_file_path(symbol_name)
+        try:
             # Prepare dataframe rows for serialization
             df_to_write = df.reset_index() if df.index.name == "Timestamp" else df.copy()
-            
-            # Format timestamp column as string for Mongo compatibility
+
+            # Format timestamp column as string
             df_to_write['Timestamp'] = df_to_write['Timestamp'].astype(str)
-            records = df_to_write.to_dict(orient="records")
-            
-            if records:
-                result = collection.insert_many(records)
-                inserted_count = len(result.inserted_ids)
-                logger.info(f"Successfully inserted {inserted_count} records to MongoDB collection '{collection_name}'.")
-                return inserted_count
+            new_records = df_to_write.to_dict(orient="records")
+
+            if not new_records:
+                return 0
+
+            with self._lock:
+                # Load existing data and append
+                existing = self._read_json_file(file_path)
+                if existing:
+                    logger.warning(f"File '{file_path.name}' already contains {len(existing)} records. Appending new data.")
+                existing.extend(new_records)
+                success = self._write_json_file(file_path, existing)
+
+            if success:
+                logger.info(f"Successfully inserted {len(new_records)} records to '{file_path.name}'.")
+                return len(new_records)
             return 0
         except Exception as e:
-            logger.error(f"Failed to bulk write records to MongoDB collection {collection_name}: {e}")
+            logger.error(f"Failed to bulk write records to '{file_path.name}': {e}")
             return 0
 
     def load_candles_from_db(self, symbol_name: str) -> Optional[pd.DataFrame]:
-        """Loads all stored candles from the MongoDB collection and returns a structured DataFrame."""
-        collection_name = self.get_collection_name(symbol_name)
-        collection = self.db[collection_name]
+        """Loads all stored candles from the JSON file and returns a structured DataFrame."""
+        file_path = self._get_candle_file_path(symbol_name)
         try:
-            cursor = collection.find().sort("Timestamp", pymongo.ASCENDING)
-            data_list = list(cursor)
+            data_list = self._read_json_file(file_path)
             if not data_list:
-                logger.warning(f"No stored data found in collection '{collection_name}'.")
+                logger.warning(f"No stored data found in '{file_path.name}'.")
                 return None
 
             df = pd.DataFrame(data_list)
-            # Drop MongoDB internal Object ID
+
+            # Drop any internal ID fields if present (migration safety)
             if "_id" in df.columns:
                 df.drop(columns=["_id"], inplace=True)
-            
+
             # Normalize timestamps to naive local time format by removing 'T' and timezone offsets (e.g. '+05:30')
             clean_ts = df["Timestamp"].astype(str).str.replace("T", " ").str.split("+").str[0]
             df["Timestamp"] = pd.to_datetime(clean_ts)
             df.set_index("Timestamp", inplace=True)
-            logger.info(f"Loaded {len(df)} records from MongoDB collection '{collection_name}'.")
+            df.sort_index(inplace=True)
+            logger.info(f"Loaded {len(df)} records from '{file_path.name}'.")
             return df
         except Exception as e:
-            logger.error(f"Error loading records from MongoDB collection {collection_name}: {e}")
+            logger.error(f"Error loading records from '{file_path.name}': {e}")
             return None
 
     def calculate_indicators_and_check(self, df: pd.DataFrame, symbol_name: str) -> pd.DataFrame:
@@ -272,44 +321,70 @@ class DatabaseManager:
                 plt.close(fig)
 
     def save_executed_trade(self, trade_info: Dict[str, Any]):
-        """Saves an executed trade to the executed_trades collection in MongoDB."""
+        """Saves an executed trade to the executed_trades JSON file."""
         try:
-            self.db["executed_trades"].insert_one(trade_info)
-            logger.info(f"Successfully saved executed trade to database: {trade_info.get('symbol')} at {trade_info.get('open_price')}")
+            file_path = self._get_trades_file_path("executed_trades")
+            with self._lock:
+                trades = self._read_json_file(file_path)
+                trades.append(trade_info)
+                self._write_json_file(file_path, trades)
+            logger.info(f"Successfully saved executed trade: {trade_info.get('symbol')} at {trade_info.get('open_price')}")
         except Exception as e:
-            logger.error(f"Failed to save executed trade to database: {e}")
+            logger.error(f"Failed to save executed trade: {e}")
 
     def save_missed_trade(self, trade_info: Dict[str, Any]):
-        """Saves a missed trade to the missed_trades collection in MongoDB."""
+        """Saves a missed trade to the missed_trades JSON file."""
         try:
-            self.db["missed_trades"].insert_one(trade_info)
-            logger.info(f"Successfully saved missed trade to database: {trade_info.get('symbol')} due to {trade_info.get('reason')}")
+            file_path = self._get_trades_file_path("missed_trades")
+            with self._lock:
+                trades = self._read_json_file(file_path)
+                trades.append(trade_info)
+                self._write_json_file(file_path, trades)
+            logger.info(f"Successfully saved missed trade: {trade_info.get('symbol')} due to {trade_info.get('reason')}")
         except Exception as e:
-            logger.error(f"Failed to save missed trade to database: {e}")
+            logger.error(f"Failed to save missed trade: {e}")
+
+    def update_trade(self, query: Dict[str, Any], updates: Dict[str, Any]):
+        """Finds and updates a trade in executed_trades by matching query fields."""
+        try:
+            file_path = self._get_trades_file_path("executed_trades")
+            with self._lock:
+                trades = self._read_json_file(file_path)
+                updated = False
+                for trade in trades:
+                    # Check if all query keys match
+                    if all(trade.get(k) == v for k, v in query.items() if v is not None):
+                        trade.update(updates)
+                        updated = True
+                        break
+                if updated:
+                    self._write_json_file(file_path, trades)
+                    logger.info(f"Successfully updated trade matching {query}.")
+                else:
+                    logger.warning(f"No trade found matching query {query} for update.")
+        except Exception as e:
+            logger.error(f"Failed to update trade: {e}")
 
     def get_executed_trades(self) -> List[Dict[str, Any]]:
-        """Loads all executed trades from database sorted by timestamp descending."""
+        """Loads all executed trades sorted by timestamp descending."""
         try:
-            trades = list(self.db["executed_trades"].find().sort("timestamp", pymongo.DESCENDING))
-            # Clean Mongo Object ID for frontend safety
-            for t in trades:
-                if "_id" in t:
-                    t["_id"] = str(t["_id"])
+            file_path = self._get_trades_file_path("executed_trades")
+            trades = self._read_json_file(file_path)
+            # Sort by timestamp descending
+            trades.sort(key=lambda t: t.get("timestamp", ""), reverse=True)
             return trades
         except Exception as e:
             logger.error(f"Failed to load executed trades: {e}")
             return []
 
     def get_missed_trades(self) -> List[Dict[str, Any]]:
-        """Loads all missed trades from database sorted by timestamp descending."""
+        """Loads all missed trades sorted by timestamp descending."""
         try:
-            trades = list(self.db["missed_trades"].find().sort("timestamp", pymongo.DESCENDING))
-            # Clean Mongo Object ID for frontend safety
-            for t in trades:
-                if "_id" in t:
-                    t["_id"] = str(t["_id"])
+            file_path = self._get_trades_file_path("missed_trades")
+            trades = self._read_json_file(file_path)
+            # Sort by timestamp descending
+            trades.sort(key=lambda t: t.get("timestamp", ""), reverse=True)
             return trades
         except Exception as e:
             logger.error(f"Failed to load missed trades: {e}")
             return []
-

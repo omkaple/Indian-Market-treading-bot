@@ -28,7 +28,7 @@ class DataPipeline:
         logger.info("Connecting and authenticating with Angel One Servers...")
         self.smart_conn = SmartConnect(api_key=self.api_key)
         try:
-            totp_token = pyotp.TOTP(self.totp_secret).now()
+            totp_token = pyotp.TOTP(self.totp_secret.strip()).now()
             session = self.smart_conn.generateSession(self.client_code, self.password, totp_token)
             if session.get("status") is True:
                 logger.info("Broker Authentication Successful.")

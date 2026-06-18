@@ -2,7 +2,6 @@ streamlit
 pandas
 numpy
 plotly
-pymongo
 matplotlib
 torch
 scikit-learn
