@@ -7,7 +7,7 @@ A state-of-the-art hybrid quantitative trading bot that combines traditional tec
 ## 🌟 Key Features
 
 1. **Intelligent Dashboard**: Built with Streamlit, providing interactive technical candlestick charts, KPI metric cards, and a configuration control center.
-2. **MongoDB Storage**: Isolates historical candle data, active trades, and missed trades in localized MongoDB collections for fast query execution and analytical persistence.
+2. **JSON File Storage**: Isolates historical candle data, active trades, and missed trades in local JSON files within a `data/` directory — zero database setup required.
 3. **PyTorch 1D CNN Filter**: A deep learning classifier trained on historical golden cross events to predict if a breakout will hit its profit target before hitting its stop loss.
 4. **Local Vision AI Filtration**: Automatically generates a technical chart of crossover events and sends it to a local Ollama instance running `llama3.2-vision` to verify crossover angle, candle structures, and volume confirmation before taking a trade.
 5. **Real-time WebSocket Bot**: Aggregates ticks from the live market stream into 5-minute candles, stores them to the database, tracks profit targets/stop losses on active positions, and executes orders.
@@ -20,9 +20,9 @@ A state-of-the-art hybrid quantitative trading bot that combines traditional tec
 *   `app.py`: Main Streamlit dashboard script containing page setups, technical charting, and backtest results.
 *   `bot.py`: Live execution engine processing real-time WebSocket tick aggregation, position tracking, and order placement.
 *   `pipeline.py`: Data ingestion framework managing Angel One session authentication, historical pagination block fetching, and WebSocket streams.
-*   `database.py`: Database operations driver connecting to local MongoDB, calculating indicators (20/50 EMA), and outputting Matplotlib crossover charts.
+*   `database.py`: Data operations driver using local JSON file storage, calculating indicators (20/50 EMA), and outputting Matplotlib crossover charts.
 *   `model.py`: Neural network definition for the 1D CNN classifier along with preprocessing utilities and simulation functions.
-*   `train_model.py`: PyTorch training script generating labels from database records, compiling datasets, and optimizing classifier weights.
+*   `train_model.py`: PyTorch training script generating labels from stored candle data, compiling datasets, and optimizing classifier weights.
 *   `vision.py`: Image base64 encoder and API connector wrapper targeting local Ollama services, plus pre-order brokerage dispatch validation.
 
 ---
@@ -39,16 +39,7 @@ To run this bot from scratch, ensure you have the following software installed:
   python --version
   ```
 
-### 2. MongoDB Community Server
-* **Download:** [https://www.mongodb.com/try/download/community](https://www.mongodb.com/try/download/community)
-* Choose the **MSI installer** for Windows, run the installer, and select **"Complete"** installation.
-* **Optional:** During setup, you can choose to install MongoDB as a **Windows Service** (it will start automatically on boot). If you skip this, you'll need to start it manually each time (see Step 5 below).
-* Verify installation:
-  ```bash
-  mongod --version
-  ```
-
-### 3. Ollama (for Vision AI)
+### 2. Ollama (for Vision AI)
 * **Download:** [https://ollama.com/download](https://ollama.com/download)
 * Run the Windows installer. **Restart your terminal** after installation so the `ollama` command is recognized.
 * Pull the required Vision AI model:
@@ -106,20 +97,7 @@ ANGEL_TOTP_SECRET=your_2fa_totp_secret_key
 ```
 *Note: You can also update these keys directly inside the **Security Credentials** tab of the dashboard.*
 
-### 5. Start MongoDB
-MongoDB must be running **before** you launch the dashboard. Open a **separate terminal window** and run:
-```bash
-# Start MongoDB with the project data directory
-mongod --dbpath "mongodb_data" --port 27017
-```
-> **Keep this terminal window open** — MongoDB runs in the foreground here. If you close it, the database stops.
-
-**Alternative (Windows Service):** If you installed MongoDB as a Windows Service, you can start it from an **Administrator** terminal instead:
-```powershell
-net start MongoDB
-```
-
-### 6. Launch the Dashboard
+### 5. Launch the Dashboard
 Start the Streamlit application (in your original terminal with the venv activated):
 ```bash
 streamlit run app.py
@@ -136,7 +114,7 @@ Once the Streamlit dashboard is open, follow these steps to download data, train
 1. In the sidebar, type a target stock symbol (e.g. `CANBK` or `SBIN`). The app will look up the token from Angel One's Scrip Master cache.
 2. Click **Download Stock Data**. 
    * This fetches 5 years of 5-minute historical candles from the broker API.
-   * Data is cleaned, duplicates are removed, and the records are stored in MongoDB.
+   * Data is cleaned, duplicates are removed, and the records are stored as JSON files in the `data/` directory.
    * **Important:** The system will automatically trigger the model training script (`train_model.py`) immediately after the download completes.
 
 ### Step B: Train the PyTorch Model (Manual Option)
@@ -153,7 +131,7 @@ If you have already downloaded the data and need to retrain the neural network w
 1. Navigate to the **Live Trading Bot** tab.
 2. Ensure you have local Ollama running in the background.
 3. Click **Start Live Trading Bot** to activate real-time tick streaming.
-   * The bot will stream live ticks, aggregate them into 5-minute candles, insert them to the database, and monitor active positions.
+    * The bot will stream live ticks, aggregate them into 5-minute candles, save them to local storage, and monitor active positions.
    * When a new 20/50 EMA crossover occurs, the bot runs the PyTorch model & Vision AI engine to evaluate technical metrics.
    * If both approve, an automated MIS Intraday order is placed via the broker.
 
@@ -189,26 +167,6 @@ pip install logzero websocket-client pycryptodome
 ```
 
 Or re-run `pip install -r requirements.txt` (these are already included in the file).
-
-### `Failed to connect to local MongoDB` / `WinError 10061`
-MongoDB is not running. Start it manually in a **separate terminal window**:
-
-**Git Bash:**
-```bash
-mongod --dbpath "mongodb_data" --port 27017
-```
-
-**PowerShell:**
-```powershell
-mongod --dbpath "mongodb_data" --port 27017
-```
-
-**PowerShell (as Windows Service — requires Administrator):**
-```powershell
-net start MongoDB
-```
-
-Keep that terminal open while using the dashboard.
 
 ### `ollama: command not found`
 Ollama is not installed or not added to your system PATH.
